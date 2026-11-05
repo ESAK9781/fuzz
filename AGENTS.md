@@ -31,6 +31,11 @@ PDFs, text, audio, video and images and lets you search it by meaning. Everythin
   renders highlighted context thumbnails, and the scrollable viewer that opens scrolled to the match.
   PDF bytes come from the `read_pdf` command (binary `ipc::Response`). `ui/vendor/` is a checked-in copy of
   pdf.js 4.10.38 (+cmaps, standard fonts) renamed `.mjs` → `.js`; update by re-copying from `pdfjs-dist/build`.
+- `ui/mediaview.js` — lazy ES module: viewer for audio/video/images. Files stream through Tauri's **asset
+  protocol** (`protocol-asset` feature, `assetProtocol` enabled in `tauri.conf.json`); each opened library's folder
+  is added to the scope at runtime in `install()`. Opens at the hit's `start_sec`, shows the indexed transcript
+  (`transcript` command = timed child chunks) with the matching cue marked; clicking a cue seeks. The PDF viewer
+  overlays a selectable pdf.js `TextLayer` (styles in `ui/vendor/pdf_viewer.css`).
 - `src-tauri/src/msvc_shim.rs` — Windows-only shim for a vectorised-STL symbol ONNX Runtime needs when the
   installed MSVC is older than 14.44.
 
@@ -66,8 +71,10 @@ PDFs, text, audio, video and images and lets you search it by meaning. Everythin
 ## Known limitations / roadmap
 - Audio/video/images are searchable via sidecar text only (`name.srt|vtt|transcript.txt`, images
   `name.caption.txt`) plus filename; no built-in transcription/OCR/captioning yet.
-- PDFs open in the built-in viewer at the match (no text selection layer yet); other media open in the default
-  app and the page/timestamp is only displayed, not deep-linked. Audio/video thumbnails/players are not built.
+- Video/audio play in the WebView2 player: MP4(H.264)/WebM/MP3/WAV/M4A/OGG work, but MKV/AVI/FLAC/WMV may not;
+  the viewer then offers "Open in default app". Video thumbnails are the browser's frame at the timestamp.
+- Still missing: built-in transcription (audio/video are searchable only via sidecar transcripts), OCR/captioning
+  for images, in-PDF find, and a PDF page sidebar.
 - The quantized int8 model runs on CPU even when a GPU provider is listed (many int8 ops lack GPU kernels); an
   fp16/fp32 model would use CUDA/DirectML more fully.
 - **Releases are not set up yet but are planned** (GitHub Actions + `tauri-action` producing .exe/.msi,

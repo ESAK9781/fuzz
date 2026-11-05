@@ -217,6 +217,7 @@ export async function openViewer({ doc, title, page: targetPage = 1, text = "", 
       el.style.height = sizes[i][1] * scale + "px";
       el.dataset.rendered = "";
       el.querySelector("canvas")?.remove();
+      el.querySelector(".textLayer")?.remove();
     });
     obs.disconnect();
     pageEls.forEach((el) => obs.observe(el));
@@ -232,13 +233,23 @@ export async function openViewer({ doc, title, page: targetPage = 1, text = "", 
       const p = await doc.getPage(n);
       const cssW = parseFloat(el.style.width);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const scale = (cssW / sizes[n - 1][0]) * dpr;
+      const cssScale = cssW / sizes[n - 1][0];
+      const scale = cssScale * dpr;
       const vp = p.getViewport({ scale });
       const c = document.createElement("canvas");
       c.width = vp.width; c.height = vp.height;
       c.style.width = "100%"; c.style.height = "100%";
       await p.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-      if (el.dataset.rendered) el.prepend(c);
+      if (!el.dataset.rendered) return;
+      el.prepend(c);
+      // transparent, selectable text on top of the canvas (copy with Ctrl+C)
+      const tl = document.createElement("div");
+      tl.className = "textLayer";
+      tl.style.setProperty("--scale-factor", cssScale);
+      c.after(tl);
+      try {
+        await new pdfjs.TextLayer({ textContentSource: p.streamTextContent(), container: tl, viewport: p.getViewport({ scale: cssScale }) }).render();
+      } catch (e) { console.warn("text layer failed", e); }
     }
   }, { root: scroll, rootMargin: "900px 0px" });
 

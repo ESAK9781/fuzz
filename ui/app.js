@@ -28,6 +28,7 @@ const P = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
   download: '<path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+  play: '<path d="M8 5v14l11-7z" style="fill:currentColor;stroke:none"/>',
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
   reveal: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="2.5"/>',
 };
@@ -65,6 +66,8 @@ let resolveReady;
 S.ready = new Promise((r) => (resolveReady = r));
 let pdfP = null;
 const pdfMod = () => (pdfP ||= import("./pdfview.js"));
+let mediaP = null;
+const mediaMod = () => (mediaP ||= import("./mediaview.js"));
 let searchSeq = 0;
 let debounceT = null;
 
@@ -112,6 +115,12 @@ const folderCount = (f) => S.lib.files.filter((x) => x.path.startsWith(f + "/"))
 const inFolder = (path) => !S.folder || path.startsWith(S.folder + "/");
 const hasTags = (tags) => [...S.tags].every((t) => tags.includes(t));
 const fileById = (id) => S.lib?.files.find((f) => f.id === id);
+function absPath(rel) {
+  const base = S.lib.path.replace(/[\\/]+$/, "");
+  const win = S.lib.path.includes("\\");
+  return base + (win ? "\\" + rel.replace(/\//g, "\\") : "/" + rel);
+}
+const assetUrl = (rel) => window.__TAURI__.core.convertFileSrc(absPath(rel));
 
 /* ---------------- popovers & modals ---------------- */
 function closePop() { $("#popRoot").innerHTML = ""; }
@@ -553,7 +562,7 @@ function renderDeck() {
 function actionsHtml(f) {
   const bm = f.tags.includes("bookmark");
   return `<div class="actions">
-    ${f.media_type === "pdf" ? `<button class="icon-btn" data-act="view" title="View PDF">${ic("eye")}</button>` : ""}
+    ${["pdf", "video", "audio", "image"].includes(f.media_type) ? `<button class="icon-btn" data-act="view" title="${f.media_type === "pdf" ? "View PDF" : "Preview"}">${ic("eye")}</button>` : ""}
     <button class="icon-btn ${bm ? "on" : ""}" data-act="bookmark" title="${bm ? "Remove bookmark" : "Bookmark"}">${ic("star", bm ? 'style="fill:currentColor"' : "")}</button>
     <button class="icon-btn" data-act="tags" title="Edit tags">${ic("tag")}</button>
     <button class="icon-btn" data-act="move" title="Move to folder">${ic("move")}</button>
@@ -574,6 +583,19 @@ function meterHtml(score) {
   const tone = pct >= 70 ? "hi" : pct >= 40 ? "mid" : "lo";
   return `<div class="meter ${tone}" title="Match closeness (cosine similarity ${score.toFixed(3)})" role="img" aria-label="${pct}% match">
     <svg viewBox="0 0 40 40"><circle class="trk" cx="20" cy="20" r="${r}"/><circle class="val" cx="20" cy="20" r="${r}" stroke-dasharray="${((pct / 100) * c).toFixed(1)} ${c.toFixed(1)}"/></svg><span>${pct}</span></div>`;
+}
+
+function thumbHtml(h, i) {
+  const loc = h.start_sec != null ? fmtTime(h.start_sec) : "";
+  if (h.media_type === "pdf")
+    return `<button class="thumb pdf" data-i="${i}" title="Open this spot in the PDF" aria-label="Open PDF at match"><span class="thumb-skel"></span></button>`;
+  if (h.media_type === "image")
+    return `<button class="thumb media" data-i="${i}" title="Preview image"><img loading="lazy" alt="" src="${esc(assetUrl(h.path))}" /></button>`;
+  if (h.media_type === "video")
+    return `<button class="thumb media vid" data-i="${i}" title="Play from ${loc || "start"}"><video muted playsinline preload="metadata" src="${esc(assetUrl(h.path))}#t=${((h.start_sec || 0) + 0.1).toFixed(1)}"></video><span class="playbadge">${ic("play")}</span><span class="thumb-tag always">${loc ? "▶ " + loc : "Play"}</span></button>`;
+  if (h.media_type === "audio")
+    return `<button class="thumb media aud" data-i="${i}" title="Play from ${loc || "start"}"><span class="aud-ic">${ic("play")}</span><span class="aud-txt"><b>${loc ? "Play at " + loc : "Play audio"}</b><small>${h.end_sec != null && h.start_sec != null ? `${fmtTime(h.start_sec)} – ${fmtTime(h.end_sec)}` : "Open the player"}</small></span></button>`;
+  return "";
 }
 
 function renderResults() {
@@ -612,10 +634,10 @@ function renderResults() {
           return `<article class="card" data-file="${h.file_id}" data-i="${i}">
             <div class="card-head">${badgeHtml(h.media_type)}${pathHtml(h.path)}${loc ? `<span class="loc" title="Where this match is">${loc}</span>` : ""}
               ${meterHtml(h.score)}${actionsHtml({ tags: h.tags, media_type: h.media_type })}</div>
-            <div class="card-body ${h.media_type === "pdf" ? "with-thumb" : ""}">
+            <div class="card-body ${["pdf", "image", "video", "audio"].includes(h.media_type) ? "with-thumb" : ""}">
               <div class="card-text"><p class="quote">${highlight(h.text, q)}</p>
                 <div class="card-foot">${ctx ? `<button class="ctx-toggle" aria-expanded="false" data-act="ctx">${ic("right")}Context</button>` : ""}${tagsHtml(h.tags)}</div></div>
-              ${h.media_type === "pdf" ? `<button class="thumb" data-i="${i}" title="Open this spot in the PDF" aria-label="Open PDF at match"><span class="thumb-skel"></span></button>` : ""}
+              ${thumbHtml(h, i)}
             </div>
             ${ctx ? `<div class="context" hidden>${highlight(h.parent_text, q)}</div>` : ""}</article>`;
         }).join("");
@@ -635,7 +657,7 @@ function paintThumb(el, t) {
 }
 function hydrateThumbs() {
   thumbObs?.disconnect();
-  const els = [...document.querySelectorAll(".thumb[data-i]")];
+  const els = [...document.querySelectorAll(".thumb.pdf[data-i]")];
   if (!els.length) return;
   thumbObs = new IntersectionObserver((entries) => {
     for (const en of entries) {
@@ -679,9 +701,28 @@ async function openPdf(h) {
   }
 }
 
+async function openMediaFor(h) {
+  try {
+    const mod = await mediaMod();
+    let cues = [];
+    if (h.media_type === "audio" || h.media_type === "video") {
+      try { cues = await invoke("transcript", { fileId: h.file_id }); } catch {}
+    }
+    mod.openMedia({
+      kind: h.media_type, title: h.path, src: assetUrl(h.path),
+      start: h.start_sec || 0,
+      match: h.start_sec != null ? { start: h.start_sec, end: h.end_sec ?? h.start_sec } : null,
+      cues, onExternal: () => call("open_file", { fileId: h.file_id }),
+    });
+  } catch (e) {
+    toast("Could not open this file: " + e, "error");
+  }
+}
+const openHit = (h) => (h.media_type === "pdf" ? openPdf(h) : openMediaFor(h));
+
 function onResultClick(e) {
   const thumb = e.target.closest(".thumb[data-i]");
-  if (thumb) { const h = S.shown[+thumb.dataset.i]; if (h) openPdf(h); return; }
+  if (thumb) { const h = S.shown[+thumb.dataset.i]; if (h) openHit(h); return; }
   const tagBtn = e.target.closest("[data-tagfilter]");
   if (tagBtn) { const t = tagBtn.dataset.tagfilter; S.tags.has(t) ? S.tags.delete(t) : S.tags.add(t); renderSidebar(); renderDeck(); refresh(); return; }
   const b = e.target.closest("[data-act]");
@@ -701,7 +742,8 @@ function onResultClick(e) {
   else if (act === "move") movePopover(b, id);
   else if (act === "view") {
     const h = card.dataset.i != null ? S.shown[+card.dataset.i] : null;
-    openPdf(h || { file_id: id, path: fileById(id).path, page: 1, text: "", granularity: "file" });
+    const f = fileById(id);
+    openHit(h || { file_id: id, path: f.path, media_type: f.media_type, page: 1, text: "", granularity: "file" });
   }
   else if (act === "reveal") call("reveal_file", { fileId: id });
   else if (act === "open") call("open_file", { fileId: id });

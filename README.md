@@ -7,6 +7,7 @@ exact quote, passage or document you're thinking of.
 ## Features
 - **Local & private** — embeddings run on your machine (EmbeddingGemma via ONNX Runtime, using CUDA / DirectML / CoreML when available, CPU otherwise). Nothing is uploaded.
 - **See the match in the PDF** — each PDF result shows a small thumbnail of the page with the matched text highlighted in its surrounding lines. Click it to open a viewer scrolled to that exact spot.
+- **Play it where it was said** — audio and video hits open a built-in player at the matched timestamp with a clickable transcript; images get previews. PDF text in the viewer is selectable.
 - **Match meter** — a circular meter on every result shows how close the match is.
 - **Three result scopes** — exact quotes/sentences, whole passages, or full documents; matches show their parent context, page or timestamp.
 - **Libraries are just folders** with a hidden `.semantic_index.json`. Organise media into real **subfolders**, **bookmark** items and add your own **tags**, then filter by folder, tag and media type.

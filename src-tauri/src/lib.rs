@@ -148,7 +148,9 @@ fn forget_recent(state: State<AppState>, path: String) -> AppConfig {
     c.clone()
 }
 
-fn install(state: &AppState, root: PathBuf, lib: Library) -> LibraryView {
+fn install(app: &AppHandle, state: &AppState, root: PathBuf, lib: Library) -> LibraryView {
+    // let the webview stream this library's media (video/audio/images) via the asset protocol
+    let _ = app.asset_protocol_scope().allow_directory(&root, true);
     let mut cfg = state.config.lock();
     cfg.touch_recent(&lib.name, &root.to_string_lossy());
     cfg.save();
@@ -160,7 +162,7 @@ fn install(state: &AppState, root: PathBuf, lib: Library) -> LibraryView {
 }
 
 #[tauri::command]
-async fn open_library(state: State<'_, AppState>, path: String) -> Res<LibraryView> {
+async fn open_library(app: AppHandle, state: State<'_, AppState>, path: String) -> Res<LibraryView> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         state.config.lock().forget(&path);
@@ -180,11 +182,11 @@ async fn open_library(state: State<'_, AppState>, path: String) -> Res<LibraryVi
     .await
     .map_err(err)?
     .map_err(|e| format!("Could not read {INDEX_FILE}: {e}"))?;
-    Ok(install(&state, root, lib))
+    Ok(install(&app, &state, root, lib))
 }
 
 #[tauri::command]
-async fn create_library(state: State<'_, AppState>, name: String) -> Res<LibraryView> {
+async fn create_library(app: AppHandle, state: State<'_, AppState>, name: String) -> Res<LibraryView> {
     let clean = sanitize_name(&name);
     if clean.is_empty() {
         return Err("Please enter a library name.".into());
@@ -197,7 +199,7 @@ async fn create_library(state: State<'_, AppState>, name: String) -> Res<Library
     std::fs::create_dir_all(&root).map_err(err)?;
     let lib = Library::empty(&clean);
     lib.save_to_json(&root).map_err(err)?;
-    Ok(install(&state, root, lib))
+    Ok(install(&app, &state, root, lib))
 }
 
 #[derive(Serialize, Clone)]
@@ -428,6 +430,7 @@ async fn export_library(app: AppHandle, state: State<'_, AppState>, dest: String
 async fn import_library(app: AppHandle, state: State<'_, AppState>, archive: String) -> Res<LibraryView> {
     let archive_path = PathBuf::from(archive);
     let base = PathBuf::from(state.config.lock().default_library_directory.clone());
+    let app_task = app.clone();
     let root = tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<PathBuf> {
         let manifest = archive::read_manifest(&archive_path)?;
         let clean = match sanitize_name(&manifest.library_name) {
@@ -440,7 +443,7 @@ async fn import_library(app: AppHandle, state: State<'_, AppState>, archive: Str
             root = base.join(format!("{clean} ({i})"));
             i += 1;
         }
-        if let Err(e) = archive::import(&archive_path, &root, &emit_task(&app, "Importing")) {
+        if let Err(e) = archive::import(&archive_path, &root, &emit_task(&app_task, "Importing")) {
             let _ = std::fs::remove_dir_all(&root); // never leave a half-imported library behind
             return Err(e);
         }
@@ -454,7 +457,30 @@ async fn import_library(app: AppHandle, state: State<'_, AppState>, archive: Str
         .await
         .map_err(err)?
         .map_err(|e| format!("Import failed: {e}"))?;
-    Ok(install(&state, root, lib))
+    Ok(install(&app, &state, root, lib))
+}
+
+#[derive(Serialize)]
+struct Cue {
+    start: f64,
+    end: f64,
+    text: String,
+}
+
+/// Timed text segments (from a sidecar transcript) for the media viewer's transcript panel.
+#[tauri::command]
+fn transcript(state: State<AppState>, file_id: String) -> Res<Vec<Cue>> {
+    let g = state.lib.read();
+    let l = g.as_ref().ok_or("No library open")?;
+    let mut cues: Vec<Cue> = l
+        .lib
+        .chunks
+        .iter()
+        .filter(|c| c.file_id == file_id && c.granularity == "child")
+        .filter_map(|c| Some(Cue { start: c.start_sec?, end: c.end_sec.unwrap_or(c.start_sec?), text: c.text.clone() }))
+        .collect();
+    cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+    Ok(cues)
 }
 
 #[tauri::command]
@@ -574,6 +600,7 @@ pub fn run() {
             library_view,
             install_model,
             read_pdf,
+            transcript,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fuzz");
