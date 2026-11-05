@@ -1,0 +1,50 @@
+[package]
+name = "fuzz"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+
+[lib]
+name = "fuzz_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1.0.104"
+directories = "6.0.0"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"], optional = true }
+parking_lot = "0.12.5"
+pdf-extract = "0.12.1"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"], optional = true }
+walkdir = "2.5.0"
+zip = { version = "9.4.0", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# GPU execution providers, chosen per platform (each falls back to CPU at runtime if unavailable).
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["directml", "cuda"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["cuda"], optional = true }
+
+[features]
+default = ["onnx"]
+# Real semantic embeddings (EmbeddingGemma via ONNX Runtime, GPU-accelerated when available).
+onnx = ["dep:ort", "dep:tokenizers"]

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fuzz</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand">fuzz</div>
+      <div class="lib-switch">
+        <button id="libBtn" class="lib-btn" aria-haspopup="menu"></button>
+        <div id="libMenu" class="menu" hidden></div>
+      </div>
+      <div class="spacer"></div>
+      <button id="modelPill" class="pill" title="Embedding engine"></button>
+      <button id="addBtn" class="btn" hidden></button>
+      <button id="syncBtn" class="icon-btn" title="Re-index library" hidden></button>
+      <button id="settingsBtn" class="icon-btn" title="Settings"></button>
+    </header>
+    <div id="progress" hidden><div></div><span></span></div>
+    <div id="body"></div>
+  </div>
+  <div id="popRoot"></div>
+  <div id="modalRoot"></div>
+  <div id="dropHint" hidden><div>Drop files to add them to this library</div></div>
+  <div id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>

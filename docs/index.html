@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fuzz: search your files by meaning</title>
+<meta name="description" content="fuzz is a private, offline desktop app that indexes your PDFs, notes, audio, video and images and finds them by meaning.">
+<link rel="icon" href="icon.png">
+<style>
+:root{--bg:#fafaf9;--panel:#fff;--sunk:#f3f3f1;--line:#e7e6e3;--text:#1c1b19;--muted:#6f6c65;--accent:#5b5bd6;--soft:#eeeefc}
+@media(prefers-color-scheme:dark){:root{--bg:#131312;--panel:#1a1a19;--sunk:#212120;--line:#2c2c2a;--text:#ecebe7;--muted:#9b988f;--accent:#8b8bf0;--soft:#25254a}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:980px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;gap:20px;height:64px}
+nav .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:-.02em;color:var(--text)}
+nav .brand img{width:28px;height:28px;border-radius:7px}
+nav .sp{flex:1}nav a.l{color:var(--muted);font-size:14px}
+.hero{padding:72px 0 56px;text-align:center}
+.hero h1{font-size:clamp(38px,6vw,64px);line-height:1.05;letter-spacing:-.035em;margin:0 0 18px}
+.hero p{font-size:19px;color:var(--muted);max-width:620px;margin:0 auto 30px}
+.btn{display:inline-block;padding:11px 20px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-weight:550;margin:4px}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#fff}.btn:hover{text-decoration:none;filter:brightness(1.05)}
+.mock{margin:48px auto 0;max-width:820px;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 60px rgba(20,20,40,.12);text-align:left;overflow:hidden}
+.mock .bar{display:flex;gap:7px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--sunk)}
+.mock .bar i{width:11px;height:11px;border-radius:50%;background:var(--line)}
+.mock .body{display:flex}.mock aside{width:170px;padding:16px 12px;border-right:1px solid var(--line);font-size:13px;color:var(--muted)}
+.mock aside b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#a6a39c;margin:14px 6px 6px;font-weight:600}
+.mock aside span{display:block;padding:5px 8px;border-radius:6px}.mock aside .on{background:var(--soft);color:var(--accent);font-weight:600}
+.mock main{flex:1;padding:18px}.mock .q{border:1px solid var(--accent);box-shadow:0 0 0 3px var(--soft);border-radius:11px;padding:10px 14px;margin-bottom:14px}
+.mock .r{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;font-size:14px}
+.mock .r small{color:var(--muted);display:flex;gap:8px;align-items:center;margin-bottom:4px}
+.mock mark{background:#fff0a8;color:#1c1b19;border-radius:3px}
+.tag{font-size:11px;font-weight:700;padding:1px 7px;border-radius:5px;background:var(--soft);color:var(--accent)}
+@media(max-width:640px){.mock aside{display:none}}
+section{padding:56px 0}h2{font-size:30px;letter-spacing:-.025em;margin:0 0 8px}
+.lead{color:var(--muted);margin:0 0 32px;max-width:640px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.card h3{margin:0 0 6px;font-size:17px;letter-spacing:-.01em}.card p{margin:0;color:var(--muted);font-size:15px}
+code,pre{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:13.5px}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow:auto}
+.dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.dl a{display:flex;flex-direction:column;gap:2px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;color:var(--text)}
+.dl a small{color:var(--muted)}.dl a.off{opacity:.55;pointer-events:none}
+.status{margin-top:14px;color:var(--muted);font-size:14px}
+footer{border-top:1px solid var(--line);padding:28px 0 48px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav><a class="brand" href="#"><img src="icon.png" alt="">fuzz</a><span class="sp"></span>
+    <a class="l" href="#features">Features</a><a class="l" href="#download">Download</a><a class="l" href="#build">Build</a><a class="l" id="gh" href="#">GitHub</a></nav>
+
+  <header class="hero">
+    <h1>Search your files<br>by meaning.</h1>
+    <p>fuzz indexes your PDFs, notes, recordings, video and images on your own computer and finds the exact quote, passage or document you have in mind. Private by design.</p>
+    <a class="btn p" href="#download">Download</a><a class="btn" id="gh2" href="#">View on GitHub</a>
+    <div class="mock" aria-hidden="true">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <div class="body"><aside><b>Library</b><span class="on">All media</span><span>★ Bookmarks</span><b>Folders</b><span>Lectures</span><span>Papers</span><b>Tags</b><span># to-read</span></aside>
+      <main><div class="q">how do models handle long-range dependencies?</div>
+        <div class="r"><small><span class="tag">PDF</span>Papers/attention.pdf · p. 2</small>Transformers rely on <mark>self-attention</mark> to relate any two positions in a sequence.</div>
+        <div class="r"><small><span class="tag">AUDIO</span>Lectures/week-3.mp3 · 14:32</small>…so distance doesn't matter, every token can look at every other token…</div></main></div>
+    </div>
+  </header>
+
+  <section id="features">
+    <h2>Built to stay out of your way</h2>
+    <p class="lead">A minimal interface over a serious engine.</p>
+    <div class="grid">
+      <div class="card"><h3>Local &amp; private</h3><p>Embeddings run on-device with EmbeddingGemma via ONNX Runtime. Nothing is uploaded.</p></div>
+      <div class="card"><h3>Hardware accelerated</h3><p>Uses CUDA, DirectML or CoreML when present and falls back to CPU. Indexing runs on background threads so the app stays responsive.</p></div>
+      <div class="card"><h3>Quotes, passages, documents</h3><p>Choose result granularity. Matches show their surrounding context, page number or timestamp.</p></div>
+      <div class="card"><h3>Folders, bookmarks &amp; tags</h3><p>Organize media in real subfolders, bookmark favorites, add your own tags, and filter by any combination.</p></div>
+      <div class="card"><h3>Portable libraries</h3><p>A library is a folder plus one JSON index. It opens on Windows, macOS and Linux, and exports to a single <code>.fuzz</code> file you can import anywhere.</p></div>
+      <div class="card"><h3>Lightweight</h3><p>A native Tauri app: no Electron, no accounts, no runtime to install.</p></div>
+    </div>
+  </section>
+
+  <section id="download">
+    <h2>Download</h2>
+    <p class="lead">Installers for Windows, macOS and Linux are planned. This page will list them as soon as the first release is published.</p>
+    <div class="dl" id="dl">
+      <a class="off" href="#"><b>Windows</b><small>.exe / .msi · coming soon</small></a>
+      <a class="off" href="#"><b>macOS</b><small>.dmg · coming soon</small></a>
+      <a class="off" href="#"><b>Linux</b><small>.deb / .AppImage · coming soon</small></a>
+    </div>
+    <p class="status" id="dlstatus">In the meantime, you can <a href="#build">build it from source</a>.</p>
+  </section>
+
+  <section id="build">
+    <h2>Build from source</h2>
+    <p class="lead">Needs Rust, Node 18+, and on Windows the WebView2 runtime.</p>
+<pre>git clone <span id="clone">https://github.com/ESAK9781/fuzz</span>.git
+cd fuzz
+npm install
+npm run dev      # run in development
+npm run build    # produce a native installer</pre>
+    <p class="lead" style="margin-top:20px">For true semantic search, drop an EmbeddingGemma ONNX export (<code>model.onnx</code> + <code>tokenizer.json</code>) into the model folder shown in Settings. Without it fuzz runs in a keyword-matching mode.</p>
+  </section>
+</div>
+<footer><div class="wrap">fuzz · open source · <a id="gh3" href="#">GitHub</a></div></footer>
+<script>
+// REPO is "owner/name". Download cards fill in automatically once a release exists.
+const REPO = "ESAK9781/fuzz";
+const url = "https://github.com/" + REPO;
+["gh", "gh2", "gh3"].forEach(function (id) { document.getElementById(id).href = url; });
+document.getElementById("clone").textContent = url;
+fetch("https://api.github.com/repos/" + REPO + "/releases/latest").then(function (r) { return r.ok ? r.json() : null; }).then(function (rel) {
+  if (!rel || !rel.assets || !rel.assets.length) return;
+  var pick = function (re) { return rel.assets.filter(function (a) { return re.test(a.name); }); };
+  var groups = [["Windows", pick(/\.(exe|msi)$/i)], ["macOS", pick(/\.dmg$/i)], ["Linux", pick(/\.(deb|appimage|rpm)$/i)]];
+  document.getElementById("dl").innerHTML = groups.map(function (g) {
+    return g[1].length
+      ? g[1].map(function (a) { return '<a href="' + a.browser_download_url + '"><b>' + g[0] + '</b><small>' + a.name + '</small></a>'; }).join("")
+      : '<a class="off" href="#"><b>' + g[0] + '</b><small>coming soon</small></a>';
+  }).join("");
+  document.getElementById("dlstatus").textContent = "Latest release: " + rel.tag_name;
+}).catch(function () {});
+</script>
+</body>
+</html>
