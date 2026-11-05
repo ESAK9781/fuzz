@@ -50,7 +50,7 @@ impl AppConfig {
     pub fn load() -> Self {
         let mut cfg: AppConfig = std::fs::read_to_string(config_path())
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
             .unwrap_or_default();
         if cfg.default_library_directory.is_empty() {
             cfg.default_library_directory = default_library_dir().to_string_lossy().into_owned();

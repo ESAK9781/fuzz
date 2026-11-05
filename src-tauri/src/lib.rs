@@ -4,6 +4,7 @@ mod embed;
 mod extract;
 mod indexer;
 mod library;
+mod model;
 #[cfg(all(windows, feature = "onnx"))]
 mod msvc_shim;
 #[cfg(feature = "onnx")]
@@ -19,14 +20,17 @@ use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 struct AppState {
     config: Mutex<AppConfig>,
     lib: RwLock<Option<Loaded>>,
     embedder: RwLock<Arc<dyn Embedder>>,
+    /// True while the ONNX model is being loaded in the background at startup.
+    loading: AtomicBool,
 }
 
 type Res<T> = Result<T, String>;
@@ -60,7 +64,7 @@ struct LibraryView {
 
 fn view(state: &AppState, l: &Loaded) -> LibraryView {
     let active = state.embedder.read().name().to_string();
-    let model_mismatch = !l.lib.chunks.is_empty() && !l.lib.embedding_model.is_empty() && l.lib.embedding_model != active;
+    let model_mismatch = !state.loading.load(Ordering::Relaxed) && !l.lib.chunks.is_empty() && !l.lib.embedding_model.is_empty() && l.lib.embedding_model != active;
     let mut tag_counts: BTreeMap<String, usize> = BTreeMap::new();
     let files = l
         .lib
@@ -98,9 +102,12 @@ struct Bootstrap {
     model: ModelStatus,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ModelStatus {
     active: String,
+    installed: bool,
+    loading: bool,
+    download_bytes: u64,
     semantic: bool,
     accelerator: String,
     model_dir: String,
@@ -111,6 +118,9 @@ fn model_status(state: &AppState) -> ModelStatus {
     let name = emb.name().to_string();
     ModelStatus {
         semantic: !name.contains("hash"),
+        installed: model::installed(&config::model_dir()),
+        loading: state.loading.load(Ordering::Relaxed),
+        download_bytes: model::total_bytes(),
         accelerator: emb.accelerator(),
         active: name,
         model_dir: config::model_dir().to_string_lossy().into_owned(),
@@ -208,6 +218,9 @@ struct SyncResult {
 
 #[tauri::command]
 async fn sync_library(app: AppHandle, state: State<'_, AppState>) -> Res<SyncResult> {
+    if state.loading.load(Ordering::Relaxed) {
+        return Err("The semantic model is still loading. Try again in a moment.".into());
+    }
     let (root, snapshot) = {
         let g = state.lib.read();
         let l = g.as_ref().ok_or("No library open")?;
@@ -238,7 +251,10 @@ async fn sync_library(app: AppHandle, state: State<'_, AppState>) -> Res<SyncRes
 }
 
 #[tauri::command]
-fn search(state: State<AppState>, params: search::SearchParams) -> Res<Vec<search::Hit>> {
+async fn search(state: State<'_, AppState>, params: search::SearchParams) -> Res<Vec<search::Hit>> {
+    if state.loading.load(Ordering::Relaxed) {
+        return Ok(vec![]);
+    }
     let q = state.embedder.read().embed_query(&params.query);
     let g = state.lib.read();
     let l = g.as_ref().ok_or("No library open")?;
@@ -249,7 +265,7 @@ fn search(state: State<AppState>, params: search::SearchParams) -> Res<Vec<searc
 }
 
 fn view_mismatch(state: &AppState, l: &Loaded) -> bool {
-    !l.lib.chunks.is_empty() && !l.lib.embedding_model.is_empty() && l.lib.embedding_model != state.embedder.read().name()
+    !state.loading.load(Ordering::Relaxed) && !l.lib.chunks.is_empty() && !l.lib.embedding_model.is_empty() && l.lib.embedding_model != state.embedder.read().name()
 }
 
 fn normalize_tag(t: &str) -> String {
@@ -468,9 +484,47 @@ fn open_model_folder(app: AppHandle) -> Res<()> {
 }
 
 #[tauri::command]
-fn reload_model(state: State<AppState>) -> ModelStatus {
-    *state.embedder.write() = embed::default_embedder();
-    model_status(&state)
+async fn reload_model(state: State<'_, AppState>) -> Res<ModelStatus> {
+    state.loading.store(true, Ordering::Relaxed);
+    let emb = tauri::async_runtime::spawn_blocking(embed::default_embedder).await.map_err(err)?;
+    *state.embedder.write() = emb;
+    state.loading.store(false, Ordering::Relaxed);
+    Ok(model_status(&state))
+}
+
+/// Re-send the library view (e.g. after the model finished loading and the mismatch state changed).
+#[tauri::command]
+fn library_view(state: State<AppState>) -> Res<LibraryView> {
+    let g = state.lib.read();
+    let l = g.as_ref().ok_or("No library open")?;
+    Ok(view(&state, l))
+}
+
+/// Download the EmbeddingGemma ONNX model, then load it.
+#[tauri::command]
+async fn install_model(app: AppHandle, state: State<'_, AppState>) -> Res<ModelStatus> {
+    let dir = config::model_dir();
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        model::install(&dir, &|done, total, cur| {
+            let _ = app2.emit("task-progress", Progress { label: "Downloading model", done: done as usize, total: total as usize, current: cur.to_string() });
+        })
+    })
+    .await
+    .map_err(err)?
+    .map_err(|e| e.to_string())?;
+    reload_model(state).await
+}
+
+/// Raw PDF bytes for the in-app viewer (sent as binary, not JSON).
+#[tauri::command]
+async fn read_pdf(state: State<'_, AppState>, file_id: String) -> Res<tauri::ipc::Response> {
+    let p = abs_path(&state, &file_id)?;
+    if p.extension().and_then(|e| e.to_str()).map(|e| !e.eq_ignore_ascii_case("pdf")).unwrap_or(true) {
+        return Err("Not a PDF".into());
+    }
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(p)).await.map_err(err)?.map_err(err)?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -481,7 +535,22 @@ pub fn run() {
         .manage(AppState {
             config: Mutex::new(AppConfig::load()),
             lib: RwLock::new(None),
-            embedder: RwLock::new(embed::default_embedder()),
+            embedder: RwLock::new(Arc::new(embed::HashEmbedder)),
+            loading: AtomicBool::new(model::installed(&config::model_dir())),
+        })
+        .setup(|app| {
+            // Loading a 300 MB model can take seconds: never block the window on it.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let state = handle.state::<AppState>();
+                if state.loading.load(Ordering::Relaxed) {
+                    let emb = embed::default_embedder();
+                    *state.embedder.write() = emb;
+                    state.loading.store(false, Ordering::Relaxed);
+                }
+                let _ = handle.emit("model-ready", model_status(&state));
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
@@ -502,6 +571,9 @@ pub fn run() {
             reveal_root,
             open_model_folder,
             reload_model,
+            library_view,
+            install_model,
+            read_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fuzz");

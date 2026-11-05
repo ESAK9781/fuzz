@@ -10,8 +10,11 @@
   <div id="app">
     <header id="topbar">
       <div class="brand">fuzz</div>
+      <div class="lib-name" id="libName"></div>
+      <button id="changeBtn" class="btn sm" title="Open a different library folder (Ctrl+O)"></button>
+      <button id="newBtn" class="btn sm" title="Create a new library"></button>
       <div class="lib-switch">
-        <button id="libBtn" class="lib-btn" aria-haspopup="menu"></button>
+        <button id="recentBtn" class="btn sm" aria-haspopup="menu" aria-expanded="false" title="Recent libraries"></button>
         <div id="libMenu" class="menu" hidden></div>
       </div>
       <div class="spacer"></div>

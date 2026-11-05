@@ -25,8 +25,10 @@ const P = {
   video: '<rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-9 9"/>',
   text: '<path d="M5 6h14M5 12h14M5 18h9"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
   download: '<path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
   reveal: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="2.5"/>',
 };
 const ic = (n, extra = "") => `<svg viewBox="0 0 24 24" ${extra}>${P[n] || ""}</svg>`;
@@ -56,7 +58,13 @@ const S = {
   hits: null, // null => browse mode
   searching: false,
   syncing: false,
+  installing: false,
+  shown: [],
 };
+let resolveReady;
+S.ready = new Promise((r) => (resolveReady = r));
+let pdfP = null;
+const pdfMod = () => (pdfP ||= import("./pdfview.js"));
 let searchSeq = 0;
 let debounceT = null;
 
@@ -150,23 +158,23 @@ function modal({ title, body, confirm = "Done", cancel = "Cancel", onConfirm, da
 function setLibMenu(open) {
   const m = $("#libMenu");
   m.hidden = !open;
-  $("#libBtn").setAttribute("aria-expanded", open);
+  $("#recentBtn").setAttribute("aria-expanded", open);
   if (open) renderLibMenu();
 }
 function renderLibMenu() {
   const recents = S.cfg.recent_libraries;
   $("#libMenu").innerHTML = `
-    ${recents.length ? `<h6>Recent</h6>` : ""}
-    ${recents.map((r) => `<button class="item ${S.lib && r.path === S.lib.path ? "current" : ""}" data-open="${esc(r.path)}">
-        ${ic("library")}<span><b>${esc(r.name)}</b><span class="sub">${esc(r.path)}</span></span></button>`).join("")}
-    ${recents.length ? "<hr>" : ""}
-    <button class="item" data-act="new">${ic("plus")}New library…</button>
-    <button class="item" data-act="pick">${ic("folder")}Open folder…</button>
+    <h6>Recent libraries</h6>
+    ${recents.length ? recents.map((r) => `<button class="item ${S.lib && r.path === S.lib.path ? "current" : ""}" data-open="${esc(r.path)}">
+        ${ic("library")}<span><b>${esc(r.name)}</b><span class="sub">${esc(r.path)}</span></span></button>`).join("")
+      : '<div class="side-empty" style="padding:8px 10px">Libraries you open will show up here.</div>'}
     <hr>
     <button class="item" data-act="import">${ic("download")}Import library file…</button>
     ${S.lib ? `<button class="item" data-act="export">${ic("upload")}Export “${esc(S.lib.name)}” as a file…</button>` : ""}`;
 }
-$("#libBtn").addEventListener("click", () => setLibMenu($("#libMenu").hidden));
+$("#recentBtn").addEventListener("click", () => setLibMenu($("#libMenu").hidden));
+$("#changeBtn").addEventListener("click", () => pickLibrary());
+$("#newBtn").addEventListener("click", () => newLibraryModal());
 $("#libMenu").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
@@ -235,7 +243,12 @@ async function afterOpen(v, fresh = false) {
   S.tags.clear(); S.folder = null; S.query = ""; S.hits = null;
   await refreshCfg();
   renderAll();
-  if (!fresh && !v.model_mismatch) sync(true);
+  if (!fresh) {
+    await S.ready; // never re-index with a placeholder embedder while the model is still loading
+    try { S.lib = await invoke("library_view"); } catch {}
+    renderAll();
+    if (!S.lib.model_mismatch) sync(true);
+  }
 }
 async function sync(quiet = false) {
   if (S.syncing || !S.lib) return;
@@ -263,7 +276,9 @@ listen("task-progress", (ev) => {
   const bar = $("#progress");
   bar.hidden = total === 0 || done >= total;
   $("div", bar).style.width = total ? (done / total) * 100 + "%" : "0";
-  $("span", bar).textContent = current ? `${label} ${done}/${total} · ${current}` : `${label} ${done}/${total}`;
+  const bytes = label.startsWith("Downloading");
+  const f = (n) => (bytes ? fmtSize(n) : n);
+  $("span", bar).textContent = bytes ? `${label} ${f(done)} / ${f(total)}` : current ? `${label} ${done}/${total} · ${current}` : `${label} ${done}/${total}`;
 });
 async function addFiles(paths, folder = S.folder || "") {
   if (!paths?.length) return;
@@ -383,7 +398,10 @@ function renderAll() {
 }
 function renderTop() {
   const lib = S.lib;
-  $("#libBtn").innerHTML = `${ic("library")}<span>${lib ? esc(lib.name) : "No library"}</span>${ic("chevron")}`;
+  $("#libName").innerHTML = `${ic("library")}<span title="${lib ? esc(lib.path) : ""}">${lib ? esc(lib.name) : "No library"}</span>`;
+  $("#changeBtn").innerHTML = `${ic("folder")}Change folder`;
+  $("#newBtn").innerHTML = `${ic("plus")}New library`;
+  $("#recentBtn").innerHTML = `${ic("clock")}Recent${S.cfg?.recent_libraries?.length ? ` <span class="count-pill">${S.cfg.recent_libraries.length}</span>` : ""}${ic("chevron")}`;
   $("#addBtn").hidden = !lib;
   $("#addBtn").innerHTML = `${ic("plus")}Add files`;
   $("#syncBtn").hidden = !lib;
@@ -393,9 +411,9 @@ function renderTop() {
   const m = S.model;
   const pill = $("#modelPill");
   if (m) {
-    pill.className = "pill " + (m.semantic ? "semantic" : "lexical");
-    pill.innerHTML = `<span class="dot"></span>${m.semantic ? `EmbeddingGemma · ${esc(m.accelerator.split(">")[0].trim())}` : "Keyword mode"}`;
-    pill.title = m.semantic ? `${m.active} on ${m.accelerator}` : "Semantic model not installed. Click for details.";
+    pill.className = "pill " + (m.loading ? "loading" : m.semantic ? "semantic" : "lexical");
+    pill.innerHTML = `<span class="dot"></span>${m.loading ? "Loading model…" : m.semantic ? `EmbeddingGemma · ${esc(m.accelerator.split(">")[0].trim())}` : "Keyword mode"}`;
+    pill.title = m.loading ? "Loading the semantic model…" : m.semantic ? `${m.active} on ${m.accelerator}` : "Semantic model not installed. Click to install.";
   }
 }
 function renderBody() {
@@ -491,18 +509,42 @@ function renderNotice() {
   const n = $("#notice");
   if (!n) return;
   const l = S.lib, m = S.model;
-  if (!l?.model_mismatch) { n.innerHTML = ""; return; }
-  n.innerHTML = `<div class="banner"><span>This library was indexed with <b>${esc(l.embedding_model)}</b>, but this device is using <b>${esc(m.active)}</b>. Search is paused until the library is re-indexed here${m.semantic ? "" : " (or install the semantic model to match)"}.</span>
+  const install = l && m && !m.semantic && !m.loading && !S.dismissInstall
+    ? `<div class="banner info"><span><b>Search by meaning.</b> Install the on-device semantic model (${fmtSize(m.download_bytes)}, one-time download). Until then fuzz matches on shared words only.</span>
+        <button class="btn sm primary" id="installModel" ${S.installing ? "disabled" : ""}>${S.installing ? "Installing…" : "Install model"}</button>
+        <button class="icon-btn" id="dismissInstall" title="Not now" style="width:26px;height:26px">${ic("x")}</button></div>` : "";
+  if (!l?.model_mismatch) { n.innerHTML = install; return; }
+  n.innerHTML = install + `<div class="banner"><span>This library was indexed with <b>${esc(l.embedding_model)}</b>, but this device is using <b>${esc(m.active)}</b>. Search is paused until the library is re-indexed here${m.semantic ? "" : " (or install the semantic model to match)"}.</span>
     <button class="btn sm primary" id="reindex">Re-index</button></div>`;
 }
-document.addEventListener("click", (e) => { if (e.target.id === "reindex") sync(); });
+document.addEventListener("click", (e) => {
+  const id = e.target.closest("button")?.id;
+  if (id === "reindex") sync();
+  else if (id === "installModel") installModel();
+  else if (id === "dismissInstall") { S.dismissInstall = true; renderNotice(); }
+});
+async function installModel() {
+  if (S.installing) return;
+  S.installing = true;
+  renderNotice();
+  try {
+    S.model = await invoke("install_model");
+    toast("Semantic model installed");
+    if (S.lib) { S.lib = await invoke("library_view"); renderAll(); sync(true); }
+  } catch (e) {
+    toast(String(e), "error");
+  } finally {
+    S.installing = false;
+    $("#progress").hidden = true;
+    renderAll();
+  }
+}
 function renderDeck() {
   renderNotice();
   $("#chips").innerHTML = Object.entries(MEDIA).map(([k, m]) =>
     `<button class="chip ${S.types.has(k) ? "on" : ""}" data-type="${k}" aria-pressed="${S.types.has(k)}"><span class="box">${ic("check")}</span>${m.label}</button>`).join("");
   const browse = !S.query.trim();
-  $("#scope").className = "seg" + (browse ? " disabled" : "");
-  $("#scope").title = browse ? "Type to search; scope picks the result granularity" : "";
+  $("#scope").title = "What a result is: a single sentence/quote, a passage, or a whole file";
   $("#scope").innerHTML = SCOPES.map(([k, l]) => `<button data-scope="${k}" class="${S.scope === k ? "on" : ""}">${l}</button>`).join("");
   $("#active").innerHTML =
     (S.folder ? `<span class="filter-tag">${ic("folder", 'style="width:12px;height:12px"')} ${esc(S.folder)}<button data-clear="folder" aria-label="Clear folder filter">${ic("x", 'style="width:11px;height:11px"')}</button></span>` : "") +
@@ -511,6 +553,7 @@ function renderDeck() {
 function actionsHtml(f) {
   const bm = f.tags.includes("bookmark");
   return `<div class="actions">
+    ${f.media_type === "pdf" ? `<button class="icon-btn" data-act="view" title="View PDF">${ic("eye")}</button>` : ""}
     <button class="icon-btn ${bm ? "on" : ""}" data-act="bookmark" title="${bm ? "Remove bookmark" : "Bookmark"}">${ic("star", bm ? 'style="fill:currentColor"' : "")}</button>
     <button class="icon-btn" data-act="tags" title="Edit tags">${ic("tag")}</button>
     <button class="icon-btn" data-act="move" title="Move to folder">${ic("move")}</button>
@@ -523,6 +566,15 @@ const pathHtml = (p) => {
 };
 const badgeHtml = (t) => `<span class="badge t-${t}">${ic(MEDIA[t].icon)}${MEDIA[t].badge}</span>`;
 const tagsHtml = (tags) => tags.filter((t) => t !== "bookmark").map((t) => `<button class="tag ${S.tags.has(t) ? "on" : ""}" data-tagfilter="${esc(t)}">#${esc(t)}</button>`).join("");
+
+function meterHtml(score) {
+  const [lo, hi] = S.model?.semantic ? [0.25, 0.75] : [0.08, 0.55];
+  const pct = Math.round(Math.min(1, Math.max(0, (score - lo) / (hi - lo))) * 100);
+  const r = 15, c = 2 * Math.PI * r;
+  const tone = pct >= 70 ? "hi" : pct >= 40 ? "mid" : "lo";
+  return `<div class="meter ${tone}" title="Match closeness (cosine similarity ${score.toFixed(3)})" role="img" aria-label="${pct}% match">
+    <svg viewBox="0 0 40 40"><circle class="trk" cx="20" cy="20" r="${r}"/><circle class="val" cx="20" cy="20" r="${r}" stroke-dasharray="${((pct / 100) * c).toFixed(1)} ${c.toFixed(1)}"/></svg><span>${pct}</span></div>`;
+}
 
 function renderResults() {
   const box = $("#results");
@@ -548,6 +600,7 @@ function renderResults() {
     html = '<div class="skeleton"></div>'.repeat(4);
   } else {
     const hits = S.hits.map((h) => ({ ...h, tags: fileById(h.file_id)?.tags ?? h.tags })).filter((h) => hasTags(h.tags));
+    S.shown = hits;
     if (!hits.length) {
       html = `<div class="empty"><div class="glyph">${ic("search")}</div><h2>No results</h2><p>Nothing indexed matched “${esc(q)}”. Try another scope (${SCOPES.map((s) => s[1]).join(", ")}) or enable more media types.</p></div>`;
     } else {
@@ -558,17 +611,77 @@ function renderResults() {
           const ctx = h.parent_text && h.parent_text !== h.text;
           return `<article class="card" data-file="${h.file_id}" data-i="${i}">
             <div class="card-head">${badgeHtml(h.media_type)}${pathHtml(h.path)}${loc ? `<span class="loc" title="Where this match is">${loc}</span>` : ""}
-              <span class="score">${(h.score * 100).toFixed(0)}%</span>${actionsHtml({ tags: h.tags })}</div>
-            <p class="quote">${highlight(h.text, q)}</p>
-            <div class="card-foot">${ctx ? `<button class="ctx-toggle" aria-expanded="false" data-act="ctx">${ic("right")}Context</button>` : ""}${tagsHtml(h.tags)}</div>
+              ${meterHtml(h.score)}${actionsHtml({ tags: h.tags, media_type: h.media_type })}</div>
+            <div class="card-body ${h.media_type === "pdf" ? "with-thumb" : ""}">
+              <div class="card-text"><p class="quote">${highlight(h.text, q)}</p>
+                <div class="card-foot">${ctx ? `<button class="ctx-toggle" aria-expanded="false" data-act="ctx">${ic("right")}Context</button>` : ""}${tagsHtml(h.tags)}</div></div>
+              ${h.media_type === "pdf" ? `<button class="thumb" data-i="${i}" title="Open this spot in the PDF" aria-label="Open PDF at match"><span class="thumb-skel"></span></button>` : ""}
+            </div>
             ${ctx ? `<div class="context" hidden>${highlight(h.parent_text, q)}</div>` : ""}</article>`;
         }).join("");
     }
   }
   box.innerHTML = html;
   box.scrollTop = top;
+  hydrateThumbs();
 }
+/* ---------- PDF thumbnails & viewer ---------- */
+const thumbCache = new Map();
+let thumbObs = null, thumbQ = Promise.resolve();
+const pdfBytes = (fileId) => () => invoke("read_pdf", { fileId });
+function paintThumb(el, t) {
+  el.classList.add("ready");
+  el.innerHTML = `<img src="${t.url}" alt="PDF excerpt with the match highlighted" /><span class="thumb-tag">${ic("eye", 'style="width:12px;height:12px"')} View in PDF</span>`;
+}
+function hydrateThumbs() {
+  thumbObs?.disconnect();
+  const els = [...document.querySelectorAll(".thumb[data-i]")];
+  if (!els.length) return;
+  thumbObs = new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      thumbObs.unobserve(en.target);
+      thumbQ = thumbQ.then(() => fillThumb(en.target)).catch(() => {});
+    }
+  }, { root: $("#results"), rootMargin: "400px" });
+  for (const el of els) {
+    const h = S.shown[+el.dataset.i];
+    const key = h && h.chunk_id;
+    if (key && thumbCache.has(key)) paintThumb(el, thumbCache.get(key));
+    else thumbObs.observe(el);
+  }
+}
+async function fillThumb(el) {
+  const h = S.shown[+el.dataset.i];
+  if (!h || !el.isConnected) return;
+  try {
+    const pdf = await pdfMod();
+    const doc = await pdf.getDoc(h.file_id, pdfBytes(h.file_id));
+    const t = await pdf.renderThumb(doc, h.page || 1, h.granularity === "file" ? "" : h.text);
+    thumbCache.set(h.chunk_id, t);
+    if (el.isConnected) paintThumb(el, t);
+  } catch (e) {
+    console.warn("thumbnail failed", e);
+    if (el.isConnected) el.innerHTML = '<span class="note">Preview unavailable</span>';
+  }
+}
+async function openPdf(h) {
+  try {
+    const pdf = await pdfMod();
+    const doc = await pdf.getDoc(h.file_id, pdfBytes(h.file_id));
+    await pdf.openViewer({
+      doc, title: h.path, page: h.page || 1,
+      text: h.granularity === "file" ? "" : h.text,
+      onExternal: () => call("open_file", { fileId: h.file_id }),
+    });
+  } catch (e) {
+    toast("Could not open this PDF: " + e, "error");
+  }
+}
+
 function onResultClick(e) {
+  const thumb = e.target.closest(".thumb[data-i]");
+  if (thumb) { const h = S.shown[+thumb.dataset.i]; if (h) openPdf(h); return; }
   const tagBtn = e.target.closest("[data-tagfilter]");
   if (tagBtn) { const t = tagBtn.dataset.tagfilter; S.tags.has(t) ? S.tags.delete(t) : S.tags.add(t); renderSidebar(); renderDeck(); refresh(); return; }
   const b = e.target.closest("[data-act]");
@@ -586,6 +699,10 @@ function onResultClick(e) {
   } else if (act === "bookmark") toggleBookmark(id);
   else if (act === "tags") tagPopover(b, id);
   else if (act === "move") movePopover(b, id);
+  else if (act === "view") {
+    const h = card.dataset.i != null ? S.shown[+card.dataset.i] : null;
+    openPdf(h || { file_id: id, path: fileById(id).path, page: 1, text: "", granularity: "file" });
+  }
   else if (act === "reveal") call("reveal_file", { fileId: id });
   else if (act === "open") call("open_file", { fileId: id });
 }
@@ -610,8 +727,8 @@ async function settingsModal() {
         <div class="kv"><span>Model</span><span>${esc(m.active)}</span></div>
         <div class="kv"><span>Running on</span><span>${esc(m.accelerator)}</span></div>
         <p class="hint" style="margin-top:10px;line-height:1.5">${m.semantic ? "True semantic search is active." :
-          `Keyword mode is active (works offline, matches on shared words). For semantic search place <code>model.onnx</code> and <code>tokenizer.json</code> from an EmbeddingGemma ONNX export in the model folder below, then press Reload.`}</p>
-        <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn sm" id="openModel">Open model folder</button>
+          `Keyword mode is active (works offline, matches on shared words). Install the EmbeddingGemma model (${fmtSize(m.download_bytes)}, one-time) for search by meaning. It runs entirely on this device.`}</p>
+        <div style="display:flex;gap:8px;margin-top:8px">${m.semantic ? "" : `<button type="button" class="btn sm primary" id="installModelS">Install model</button>`}<button type="button" class="btn sm" id="openModel">Open model folder</button>
         <button type="button" class="btn sm" id="reloadModel">Reload model</button></div>
         <p class="hint">${esc(m.model_dir)}</p></div>`,
     onConfirm: () => true,
@@ -621,12 +738,13 @@ document.addEventListener("click", async (e) => {
   if (e.target.id === "chgDir") {
     const d = await dialog.open({ directory: true, title: "Default folder for new libraries" });
     if (d) { S.cfg = await call("set_default_directory", { path: d }); $("#chgDir").previousElementSibling.textContent = d; }
-  } else if (e.target.id === "openModel") call("open_model_folder");
+  } else if (e.target.id === "installModelS") { $("#modalRoot").innerHTML = ""; installModel(); }
+  else if (e.target.id === "openModel") call("open_model_folder");
   else if (e.target.id === "reloadModel") {
     S.model = await call("reload_model");
     renderTop();
-    toast(S.model.semantic ? "Semantic model loaded. Re-index to use it." : "Model not found; staying in keyword mode");
-    if (S.model.semantic && S.lib) { $("#modalRoot").innerHTML = ""; sync(); }
+    toast(S.model.semantic ? "Semantic model loaded" : "Model not found; staying in keyword mode");
+    if (S.model.semantic && S.lib) { $("#modalRoot").innerHTML = ""; S.lib = await invoke("library_view"); renderAll(); sync(); }
   }
 });
 $("#settingsBtn").addEventListener("click", settingsModal);
@@ -652,11 +770,30 @@ window.__TAURI__.webviewWindow.getCurrentWebviewWindow().onDragDropEvent((ev) =>
   else if (p.type === "drop") { $("#dropHint").hidden = true; addFiles(p.paths); }
 });
 
+listen("model-ready", async (ev) => {
+  S.model = ev.payload;
+  resolveReady();
+  renderTop();
+  if (S.lib) {
+    try { S.lib = await invoke("library_view"); } catch {}
+    renderAll();
+    if (S.query.trim()) runSearch();
+  }
+});
+
 /* ---------------- boot ---------------- */
 (async function boot() {
   const b = await invoke("bootstrap");
   S.cfg = b.config;
   S.model = b.model;
+  if (!b.model.loading) resolveReady();
+  else {
+    // fallback in case the model-ready event fired before the listener attached
+    const iv = setInterval(async () => {
+      const x = await invoke("bootstrap");
+      if (!x.model.loading) { clearInterval(iv); S.model = x.model; resolveReady(); renderTop(); }
+    }, 700);
+  }
   renderAll();
   const last = S.cfg.last_opened_path;
   if (last && S.cfg.recent_libraries.some((r) => r.path === last)) openLibrary(last);

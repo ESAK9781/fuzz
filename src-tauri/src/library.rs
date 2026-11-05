@@ -77,7 +77,7 @@ impl Library {
 
     pub fn load_from_json(root: &Path) -> anyhow::Result<Self> {
         let data = std::fs::read(root.join(INDEX_FILE))?;
-        let lib: Library = serde_json::from_slice(&data)?;
+        let lib: Library = serde_json::from_slice(data.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&data))?;
         let major = |v: &str| v.split('.').next().and_then(|m| m.parse::<u32>().ok()).unwrap_or(1);
         if major(&lib.library_version) > major(LIBRARY_VERSION) {
             anyhow::bail!("this library was created by a newer version of fuzz ({}). Please update the app.", lib.library_version);

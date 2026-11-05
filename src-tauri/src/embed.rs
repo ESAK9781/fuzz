@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::UnicodeNormalization;
 
 pub const DIM: usize = 256;
 
@@ -21,6 +23,8 @@ pub fn normalize(v: &mut [f32]) {
 
 /// Offline fallback: signed feature hashing of word uni/bi-grams and char trigrams.
 /// Captures lexical overlap (not true semantics); used when the ONNX model is absent.
+/// Unicode-aware: accents and compatibility forms are folded ("café" ≈ "cafe", "ﬁ" ≈ "fi"),
+/// and CJK text (no spaces) is indexed as character unigrams + bigrams.
 pub struct HashEmbedder;
 
 fn fnv(s: &str, seed: u64) -> u64 {
@@ -46,6 +50,48 @@ const STOP: &[&str] = &[
     "as", "by", "at", "it", "this", "that", "be", "from", "we", "our", "can",
 ];
 
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0x20000..=0x2A6DF)
+}
+
+/// Lowercase, compatibility-normalise and strip combining marks.
+pub fn fold(s: &str) -> String {
+    s.nfkd().filter(|c| !is_combining_mark(*c)).collect::<String>().to_lowercase()
+}
+
+/// (word tokens, CJK runs)
+fn tokenize(text: &str) -> (Vec<String>, Vec<Vec<char>>) {
+    let folded = fold(text);
+    let mut words = vec![];
+    let mut runs: Vec<Vec<char>> = vec![];
+    let mut cur = String::new();
+    let mut run: Vec<char> = vec![];
+    for c in folded.chars() {
+        if is_cjk(c) {
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            run.push(c);
+            continue;
+        }
+        if !run.is_empty() {
+            runs.push(std::mem::take(&mut run));
+        }
+        if c.is_alphanumeric() {
+            cur.push(c);
+        } else if !cur.is_empty() {
+            words.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
+    (words.into_iter().filter(|w| !STOP.contains(&w.as_str())).collect(), runs)
+}
+
 impl Embedder for HashEmbedder {
     fn name(&self) -> &str {
         "fuzz-hash-256d"
@@ -56,12 +102,8 @@ impl Embedder for HashEmbedder {
     }
 
     fn embed_query(&self, text: &str) -> Vec<f32> {
-        let lower = text.to_lowercase();
-        let words: Vec<&str> = lower
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty() && !STOP.contains(w))
-            .map(stem)
-            .collect();
+        let (words, runs) = tokenize(text);
+        let words: Vec<&str> = words.iter().map(|w| stem(w)).collect();
         let mut v = vec![0f32; DIM];
         let mut add = |feat: &str, w: f32| {
             let h = fnv(feat, 0);
@@ -77,6 +119,14 @@ impl Embedder for HashEmbedder {
         }
         for pair in words.windows(2) {
             add(&format!("{} {}", pair[0], pair[1]), 0.6);
+        }
+        for run in &runs {
+            for c in run {
+                add(&c.to_string(), 0.5);
+            }
+            for pair in run.windows(2) {
+                add(&pair.iter().collect::<String>(), 1.0);
+            }
         }
         // sublinear damping so long chunks don't dominate
         v.iter_mut().for_each(|x| *x = x.signum() * x.abs().sqrt());

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "fuzz",
   "version": "0.1.0",
   "private": true,
@@ -9,6 +9,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.10.38"
   }
 }
-

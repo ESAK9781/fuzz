@@ -1,6 +1,7 @@
 //! Turn a file into text units: (parent passages, child sentences) with optional page / timestamps.
 
 use std::path::Path;
+use unicode_normalization::UnicodeNormalization;
 
 pub struct Parent {
     pub text: String,
@@ -114,11 +115,30 @@ fn title_from(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Decode text files of unknown encoding: BOM-aware UTF-8/UTF-16, else UTF-8, else Windows-1252.
+pub fn decode_text(bytes: &[u8]) -> String {
+    let (enc, skip) = match bytes {
+        [0xEF, 0xBB, 0xBF, ..] => (encoding_rs::UTF_8, 3),
+        [0xFF, 0xFE, ..] => (encoding_rs::UTF_16LE, 2),
+        [0xFE, 0xFF, ..] => (encoding_rs::UTF_16BE, 2),
+        _ => match std::str::from_utf8(bytes) {
+            Ok(s) => return s.to_string(),
+            Err(_) => (encoding_rs::WINDOWS_1252, 0),
+        },
+    };
+    enc.decode_without_bom_handling(&bytes[skip..]).0.into_owned()
+}
+
+/// Compatibility-normalise (fixes PDF ligatures, full-width forms, odd spaces) and drop junk controls.
+fn clean(s: &str) -> String {
+    s.nfkc().filter(|c| *c != '\u{0}' && *c != '\u{FFFD}' && !(c.is_control() && !c.is_whitespace())).collect()
+}
+
 pub fn extract(path: &Path, media_type: &str) -> Extracted {
     let title = title_from(path);
     let (parents, has_text) = match media_type {
         "text" => {
-            let raw = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            let raw = std::fs::read(path).map(|b| clean(&decode_text(&b))).unwrap_or_default();
             let ps = group(split_sentences(&raw), None);
             let ok = !ps.is_empty();
             (ps, ok)
@@ -136,7 +156,8 @@ pub fn extract(path: &Path, media_type: &str) -> Extracted {
         _ => {
             // images: optional caption sidecar
             let cap = sidecar_path(path, "caption.txt")
-                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|p| std::fs::read(p).ok())
+                .map(|b| clean(&decode_text(&b)))
                 .unwrap_or_default();
             let ps = group(split_sentences(&cap), None);
             let ok = !ps.is_empty();
@@ -155,7 +176,7 @@ fn pdf_parents(path: &Path) -> Vec<Parent> {
         .unwrap_or_default();
     let mut out = vec![];
     for (i, text) in pages.iter().enumerate() {
-        out.extend(group(split_sentences(text), Some(i as u32 + 1)));
+        out.extend(group(split_sentences(&clean(text)), Some(i as u32 + 1)));
     }
     out
 }
@@ -169,7 +190,7 @@ fn sidecar_path(path: &Path, ext: &str) -> Option<std::path::PathBuf> {
 fn transcript_parents(path: &Path) -> Vec<Parent> {
     for ext in ["srt", "vtt"] {
         if let Some(p) = sidecar_path(path, ext) {
-            if let Ok(raw) = std::fs::read_to_string(p) {
+            if let Ok(raw) = std::fs::read(p).map(|b| clean(&decode_text(&b))) {
                 let cues = parse_cues(&raw);
                 if !cues.is_empty() {
                     return group_cues(cues);
@@ -178,7 +199,7 @@ fn transcript_parents(path: &Path) -> Vec<Parent> {
         }
     }
     if let Some(p) = sidecar_path(path, "transcript.txt") {
-        if let Ok(raw) = std::fs::read_to_string(p) {
+        if let Ok(raw) = std::fs::read(p).map(|b| clean(&decode_text(&b))) {
             return group(split_sentences(&raw), None);
         }
     }

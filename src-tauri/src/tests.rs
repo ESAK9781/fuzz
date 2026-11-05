@@ -133,3 +133,57 @@ fn archive_round_trip_is_portable() {
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&out);
 }
+
+#[test]
+fn hash_embedder_is_unicode_aware() {
+    let e = HashEmbedder;
+    let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    // accents and ligatures fold
+    assert!(dot(&e.embed_query("café résumé"), &e.embed_query("cafe resume")) > 0.99);
+    assert!(dot(&e.embed_query("ﬁnancial ﬂow"), &e.embed_query("financial flow")) > 0.99);
+    // CJK without spaces still matches on shared characters
+    let docs = e.embed_docs(&["機械学習は人工知能の一分野です".into(), "パンを焼くには時間がかかります".into()]);
+    let q = e.embed_query("人工知能");
+    assert!(dot(&q, &docs[0]) > dot(&q, &docs[1]));
+}
+
+#[test]
+fn decodes_legacy_encodings() {
+    assert_eq!(crate::extract::decode_text("naïve café".as_bytes()), "naïve café");
+    assert_eq!(crate::extract::decode_text(&[0x63, 0x61, 0x66, 0xE9]), "café"); // windows-1252
+    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain("héllo".encode_utf16().flat_map(|u| u.to_le_bytes())).collect();
+    assert_eq!(crate::extract::decode_text(&utf16), "héllo");
+}
+
+/// Downloads the real model (~330 MB) if missing and checks real semantic ranking.
+/// Run with: cargo test --lib real_model -- --ignored --nocapture
+#[cfg(feature = "onnx")]
+#[test]
+#[ignore]
+fn real_model_installs_and_ranks_semantically() {
+    let dir = crate::config::model_dir();
+    crate::model::install(&dir, &|d, t, f| {
+        if d % 50 < 2 { eprintln!("download {d}/{t} {f}"); }
+    }).unwrap();
+    let e = crate::onnx::OnnxEmbedder::try_load(&dir).expect("model loads");
+    eprintln!("accelerator: {}", e.accelerator);
+    let docs = e.embed_docs(&[
+        "The cat sat on the warm windowsill, purring in the sun.".into(),
+        "Quarterly revenue grew twelve percent on strong cloud demand.".into(),
+    ]);
+    assert_eq!(docs[0].len(), 256);
+    let q = e.embed_query("a sleepy kitten relaxing by the window");
+    let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    eprintln!("cat={:.3} finance={:.3}", dot(&q, &docs[0]), dot(&q, &docs[1]));
+    assert!(dot(&q, &docs[0]) > dot(&q, &docs[1]) + 0.05);
+}
+
+#[test]
+fn index_with_utf8_bom_still_loads() {
+    let root = tmp("bom");
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend(serde_json::to_vec(&Library::empty("bom lib")).unwrap());
+    std::fs::write(root.join(INDEX_FILE), bytes).unwrap();
+    assert_eq!(Library::load_from_json(&root).unwrap().name, "bom lib");
+    let _ = std::fs::remove_dir_all(&root);
+}

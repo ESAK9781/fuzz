@@ -15,7 +15,11 @@ PDFs, text, audio, video and images and lets you search it by meaning. Everythin
 - `extract.rs` — text/PDF/SRT/VTT → parent passages + child sentences (+ page / timestamps).
 - `indexer.rs` — `sync()`: scan → reuse unchanged / detect renames by hash → **parallel** (rayon pool, N-1
   threads) extract + embed. Always runs off the UI thread (`spawn_blocking`) and emits `task-progress`.
-- `embed.rs` — `Embedder` trait; `HashEmbedder` offline fallback ("keyword mode").
+- `embed.rs` — `Embedder` trait; `HashEmbedder` offline fallback ("keyword mode"). Unicode-aware: NFKD fold +
+  strip accents, CJK as char uni/bi-grams. Text extraction decodes BOM/UTF-16/Windows-1252 and NFKC-normalises.
+- `model.rs` — in-app installer for the EmbeddingGemma ONNX model (public `onnx-community/embeddinggemma-300m-ONNX`,
+  quantized, ~330 MB, size-verified, emits `task-progress`). The model loads in a background thread at startup
+  (`AppState.loading`); `sync_library`/`search` refuse to run with the placeholder embedder while it loads.
 - `onnx.rs` (feature `onnx`, default) — EmbeddingGemma via `ort`; tries CUDA → DirectML (Windows) / CoreML
   (macOS) / CUDA (Linux) then CPU. Truncates to 256 dims (MRL) and re-normalises.
 - `search.rs` — filter-first, rayon-parallel dot product over normalised vectors, parent hydration.
@@ -23,6 +27,12 @@ PDFs, text, audio, video and images and lets you search it by meaning. Everythin
 - `tests.rs` — unit/integration tests (`cargo test --lib`).
 - `ui/` — `index.html`, `style.css`, `app.js` (no bundler, `withGlobalTauri`). All user/file text is escaped
   with `esc()` before `innerHTML`.
+- `ui/pdfview.js` — ES module (lazy `import()`): locates a hit's text on its PDF page via pdf.js text content,
+  renders highlighted context thumbnails, and the scrollable viewer that opens scrolled to the match.
+  PDF bytes come from the `read_pdf` command (binary `ipc::Response`). `ui/vendor/` is a checked-in copy of
+  pdf.js 4.10.38 (+cmaps, standard fonts) renamed `.mjs` → `.js`; update by re-copying from `pdfjs-dist/build`.
+- `src-tauri/src/msvc_shim.rs` — Windows-only shim for a vectorised-STL symbol ONNX Runtime needs when the
+  installed MSVC is older than 14.44.
 
 ## Data & compatibility rules (do not break)
 - Library = a folder + hidden `.semantic_index.json`. Paths in the index are **relative, `/`-separated**,
@@ -43,12 +53,22 @@ PDFs, text, audio, video and images and lets you search it by meaning. Everythin
 - `npm install`, then `npm run dev` (dev) / `npm run build` (bundle).
 - `cd src-tauri && cargo test --lib`.
 - **Run only one build/test at a time**, and prefer running them in the background while you work.
-- The semantic model is NOT bundled (gated on Hugging Face). Users drop `model.onnx` + `tokenizer.json` in
-  the model folder (Settings → Open model folder). Without it the app runs in keyword mode.
+- `ureq` is pinned to `~3.1` (newer needs a newer rustc). Real-model check (downloads ~330 MB into the config dir):
+  `cargo test --lib real_model -- --ignored --nocapture`.
+- **Driving the real UI for verification without touching the desktop:** launch the debug exe with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` and talk CDP to `127.0.0.1:9222`
+  (evaluate JS, `Page.captureScreenshot`). Don't use SendKeys/full-screen captures: they hit other windows.
+  Debug builds open a console window; release builds don't. Never kill `fuzz.exe` blindly: the user may have it open.
+- The semantic model is not bundled; the app offers a one-click install (banner / Settings / pill). Manual
+  install: put `model_quantized.onnx(+_data)` and `tokenizer.json` in the model folder. Without it: keyword mode.
+  Match-meter calibration (`meterHtml` in `app.js`) maps cosine to 0–100 per engine; revisit if the model changes.
 
 ## Known limitations / roadmap
 - Audio/video/images are searchable via sidecar text only (`name.srt|vtt|transcript.txt`, images
   `name.caption.txt`) plus filename; no built-in transcription/OCR/captioning yet.
-- "Open at page/timestamp" opens the file in the default app; the location is shown, not deep-linked.
+- PDFs open in the built-in viewer at the match (no text selection layer yet); other media open in the default
+  app and the page/timestamp is only displayed, not deep-linked. Audio/video thumbnails/players are not built.
+- The quantized int8 model runs on CPU even when a GPU provider is listed (many int8 ops lack GPU kernels); an
+  fp16/fp32 model would use CUDA/DirectML more fully.
 - **Releases are not set up yet but are planned** (GitHub Actions + `tauri-action` producing .exe/.msi,
   .dmg, .deb/.AppImage, with signing). Don't add release workflows until asked.
